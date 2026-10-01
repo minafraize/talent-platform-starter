@@ -1,0 +1,17 @@
+{
+  "name": "@talent/event-schemas",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@talent/contracts": "workspace:*",
+    "zod": "^4.6.4"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

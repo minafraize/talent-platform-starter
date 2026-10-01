@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountType {
+  USER
+  TALENT
+  PROFESSIONAL
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum AccountProvider {
+  LOCAL
+  GOOGLE
+  APPLE
+}
+
+enum SessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  SESSION_REVOKED
+  ACCOUNT_LOCKED
+}
+
+model User {
+  id          String      @id @default(uuid()) @db.Uuid
+  status      UserStatus  @default(ACTIVE)
+  accountType AccountType @default(USER)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  accounts       Account[]
+  sessions       Session[]
+  securityEvents SecurityEvent[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Account {
+  id                String          @id @default(uuid()) @db.Uuid
+  userId            String          @db.Uuid
+  provider          AccountProvider
+  providerAccountId String?
+  loginIdentifier   String          @unique
+  passwordHash      String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id        String        @id @default(uuid()) @db.Uuid
+  userId    String        @db.Uuid
+  tokenHash String        @unique
+  status    SessionStatus @default(ACTIVE)
+  expiresAt DateTime
+  createdAt DateTime      @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model SecurityEvent {
+  id        String            @id @default(uuid()) @db.Uuid
+  userId    String?           @db.Uuid
+  type      SecurityEventType
+  ipHash    String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime          @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@map("security_events")
+}
+
+model OutboxEvent {
+  id            String @id @default(uuid()) @db.Uuid
+  eventId       String @unique
+  eventType     String
+  aggregateType String
+  aggregateId   String @db.Uuid
+  payload       Json
+
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+  attempts    Int       @default(0)
+
+  nextAttemptAt DateTime?
+  claimedAt     DateTime?
+  claimedBy     String?
+  lastError     String?
+  failedAt      DateTime?
+
+  @@index([publishedAt, nextAttemptAt, createdAt])
+  @@index([claimedAt])
+  @@index([claimedBy])
+  @@index([aggregateType, aggregateId])
+  @@map("outbox_events")
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@talent/contracts",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./auth/src/index.ts",
+    "./account": "./account/src/index.ts"
+  }
+}

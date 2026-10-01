@@ -1,0 +1,47 @@
+{
+  "name": "@talent/profile-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "worker:events": "tsx src/workers/events.ts",
+    "lint": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.mts",
+    "test:watch": "vitest --config vitest.config.mts",
+    "test:unit": "vitest run --config vitest.config.mts tests/unit",
+    "test:integration": "vitest run --config vitest.config.mts tests/integration",
+    "test:e2e": "vitest run --config vitest.config.mts tests/e2e",
+    "db": "prisma",
+    "db:generate": "prisma generate",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/helmet": "^13.1.1",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "@talent/auth": "workspace:^",
+    "@talent/errors": "workspace:^",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.12.3",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1",
+    "zod": "^4.6.4",
+    "@talent/event-schemas": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "@types/pg": "8.23.1",
+    "jose": "^6.2.12",
+    "prisma": "7.10.0",
+    "tsx": "^4.23.13",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}

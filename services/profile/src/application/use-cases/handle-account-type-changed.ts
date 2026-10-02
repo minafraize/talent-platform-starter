@@ -112,76 +112,50 @@ export class HandleAccountTypeChangedUseCase {
             },
           });
 
-          switch (
-            event.payload.newAccountType
-          ) {
+          switch (event.payload.newAccountType) {
             case "TALENT": {
-              if (
-                account.professionalProfile
-              ) {
+              if (account.professionalProfile) {
                 throw new Error(
                   "Cannot convert account to TALENT while PROFESSIONAL profile exists",
                 );
               }
 
-              if (
-                !account.talentProfile
-              ) {
-                await tx.talentProfile.create(
-                  {
-                    data: {
-                      accountId:
-                        account.id,
-                      status:
-                        "ACTIVE",
-                      score: 0,
-                    },
+              if (!account.talentProfile) {
+                await tx.talentProfile.create({
+                  data: {
+                    accountId: account.id,
+                    status: "ACTIVE",
+                    score: 0,
                   },
-                );
+                });
               }
 
               break;
             }
 
             case "PROFESSIONAL": {
-              if (
-                account.talentProfile
-              ) {
-                await tx.talentProfile.delete(
-                  {
-                    where: {
-                      accountId:
-                        account.id,
-                    },
+              if (account.talentProfile) {
+                await tx.talentProfile.delete({
+                  where: {
+                    accountId: account.id,
                   },
-                );
+                });
               }
 
-              if (
-                !account.professionalProfile
-              ) {
-                await tx.professionalProfile.create(
-                  {
-                    data: {
-                      accountId:
-                        account.id,
-                    },
+              if (!account.professionalProfile) {
+                await tx.professionalProfile.create({
+                  data: {
+                    accountId: account.id,
                   },
-                );
+                });
               }
 
               break;
             }
 
-            case "USER":
-              throw new Error(
-                "Account upgrade event cannot target USER",
-              );
-
             default: {
               const exhaustiveCheck: never =
-                event.payload
-                  .newAccountType;
+                event.payload.newAccountType;
 
               throw new Error(
                 `Unsupported target account type: ${exhaustiveCheck}`,

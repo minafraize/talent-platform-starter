@@ -120,6 +120,8 @@ describe(
               topic,
               groupId,
               fromBeginning: false,
+              waitForReady: true,
+              readyTimeoutMs: 10_000,
               failureInjector,
             },
           );

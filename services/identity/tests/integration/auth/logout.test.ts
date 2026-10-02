@@ -11,6 +11,9 @@ import { buildApp } from "../../../src/app.js";
 import { prisma } from "../../../src/infrastructure/database/prisma.js";
 import { hashToken } from "../../../src/infrastructure/security/token-hash.js";
 
+const TEST_REMOTE_ADDRESS =
+  "127.0.0.3";
+
 describe("POST /v1/auth/logout", () => {
   const app = buildApp();
 
@@ -51,6 +54,7 @@ describe("POST /v1/auth/logout", () => {
     const loginResponse = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email,
         password,
@@ -210,6 +214,7 @@ describe("POST /v1/auth/logout", () => {
     const loginResponse = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email,
         password,

@@ -10,6 +10,9 @@ import {
 import { buildApp } from "../../../src/app.js";
 import { prisma } from "../../../src/infrastructure/database/prisma.js";
 
+const TEST_REMOTE_ADDRESS =
+  "127.0.0.2";
+
 describe("GET /v1/auth/me", () => {
   const app = buildApp();
 
@@ -57,6 +60,7 @@ describe("GET /v1/auth/me", () => {
     const loginResponse = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email,
         password,

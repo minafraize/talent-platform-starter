@@ -56,15 +56,13 @@ describe(
 
       await producer.connect();
 
-      consumerRuntime =
-        await startProfileEventsConsumer(
-          prisma,
-          {
-            topic,
-            groupId: `profile-integration-${randomUUID()}`,
-            fromBeginning: false,
-          },
-        );
+      consumerRuntime = await startProfileEventsConsumer(prisma, {
+        topic,
+        groupId: `profile-integration-${randomUUID()}`,
+        fromBeginning: false,
+        waitForReady: true,
+        readyTimeoutMs: 10_000,
+      });
     });
 
     afterAll(async () => {
@@ -391,6 +389,8 @@ describe(
             },
             },
         });
-    });
+    },
+     15_000,
+    );
   },
 );

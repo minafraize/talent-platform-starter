@@ -332,7 +332,7 @@ export async function startProfileEventsConsumer(
       initialRetryTime: 100,
       factor: 1,
       multiplier: 1,
-      retries: 1,
+      retries: 5,
     },
   });
 

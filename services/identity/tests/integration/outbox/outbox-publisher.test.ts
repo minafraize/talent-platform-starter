@@ -400,4 +400,178 @@ describe("OutboxPublisher", () => {
     expect(updated?.claimedBy).toBeNull();
     expect(updated?.claimedAt).toBeNull();
   });
+
+  it(
+    "does not publish a later event while an earlier event is still pending",
+    async () => {
+      const aggregateId =
+        crypto.randomUUID();
+
+      const firstEventId =
+        crypto.randomUUID();
+
+      const secondEventId =
+        crypto.randomUUID();
+
+      const firstCreatedAt =
+        new Date("2026-10-01T20:00:00.000Z");
+
+      const secondCreatedAt =
+        new Date("2026-10-01T20:00:01.000Z");
+
+      await prisma.outboxEvent.create({
+        data: {
+          eventId: firstEventId,
+          eventType:
+            "identity.account.type.changed",
+          aggregateType: "User",
+          aggregateId,
+          createdAt: firstCreatedAt,
+          payload: {
+            userId: aggregateId,
+            previousAccountType:
+              "USER",
+            newAccountType:
+              "TALENT",
+          },
+        },
+      });
+
+      await prisma.outboxEvent.create({
+        data: {
+          eventId: secondEventId,
+          eventType:
+            "identity.account.type.changed",
+          aggregateType: "User",
+          aggregateId,
+          createdAt: secondCreatedAt,
+          payload: {
+            userId: aggregateId,
+            previousAccountType:
+              "TALENT",
+            newAccountType:
+              "PROFESSIONAL",
+          },
+        },
+      });
+
+      const publishedEventIds: string[] = [];
+
+      let releaseFirstPublish:
+        (() => void) | undefined;
+
+      const firstPublishStarted =
+        new Promise<void>((resolve) => {
+          releaseFirstPublish =
+            resolve;
+        });
+
+      const publisher: EventPublisher = {
+        async publish(input) {
+          const event =
+            input.event as {
+              eventId: string;
+            };
+
+          if (
+            event.eventId === firstEventId
+          ) {
+            await firstPublishStarted;
+
+            publishedEventIds.push(
+              event.eventId,
+            );
+
+            return;
+          }
+
+          publishedEventIds.push(
+            event.eventId,
+          );
+        },
+      };
+
+      const workerA =
+        new OutboxPublisher(
+          prisma,
+          publisher,
+          {
+            topic: "identity.events",
+            workerId:
+              "ordering-worker-a",
+            batchSize: 1,
+          },
+        );
+
+      const workerB =
+        new OutboxPublisher(
+          prisma,
+          publisher,
+          {
+            topic: "identity.events",
+            workerId:
+              "ordering-worker-b",
+            batchSize: 1,
+          },
+        );
+
+      /*
+      * Worker A claims the first event
+      * and blocks while publishing it.
+      */
+      const workerAPromise =
+        workerA.publishPending();
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      /*
+      * Worker B must NOT be allowed to
+      * publish the second event while
+      * the first event is still pending.
+      */
+      const secondWorkerCount =
+        await workerB.publishPending();
+
+      expect(
+        secondWorkerCount,
+      ).toBe(0);
+
+      expect(
+        publishedEventIds,
+      ).toEqual([]);
+
+      /*
+      * Finish publishing the first event.
+      */
+      releaseFirstPublish?.();
+
+      await workerAPromise;
+
+      expect(
+        publishedEventIds,
+      ).toEqual([
+        firstEventId,
+      ]);
+
+      /*
+      * Now the second event becomes
+      * eligible for publishing.
+      */
+      const thirdWorkerCount =
+        await workerB.publishPending();
+
+      expect(
+        thirdWorkerCount,
+      ).toBe(1);
+
+      expect(
+        publishedEventIds,
+      ).toEqual([
+        firstEventId,
+        secondEventId,
+      ]);
+    },
+  );
 });

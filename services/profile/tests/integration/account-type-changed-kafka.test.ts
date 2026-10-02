@@ -373,5 +373,299 @@ describe(
         [firstEvent.eventId, secondEvent.eventId],
       );
     });
+
+    it(
+      "ignores a stale event without blocking later events",
+      async () => {
+        const firstUserId =
+          randomUUID();
+
+        const secondUserId =
+          randomUUID();
+
+        /*
+        * First account already exists
+        * as TALENT.
+        */
+        await createAccount(
+          firstUserId,
+          "TALENT",
+        );
+
+        /*
+        * This is the newer event.
+        *
+        * TALENT -> PROFESSIONAL
+        */
+        const newerEvent =
+          buildEvent({
+            userId:
+              firstUserId,
+
+            previousAccountType:
+              "TALENT",
+
+            newAccountType:
+              "PROFESSIONAL",
+          });
+
+        /*
+        * This is an older event.
+        *
+        * USER -> TALENT
+        *
+        * It arrives AFTER the newer
+        * PROFESSIONAL event.
+        */
+        const staleEvent =
+          buildEvent({
+            userId:
+              firstUserId,
+
+            previousAccountType:
+              "USER",
+
+            newAccountType:
+              "TALENT",
+          });
+
+        /*
+        * Sentinel event.
+        *
+        * Same Kafka key as the previous
+        * messages so it stays on the same
+        * partition.
+        *
+        * If the stale event poisons the
+        * consumer, this event will never
+        * be processed.
+        */
+        await createAccount(
+          secondUserId,
+          "USER",
+        );
+
+        const sentinelEvent =
+          buildEvent({
+            userId:
+              secondUserId,
+
+            previousAccountType:
+              "USER",
+
+            newAccountType:
+              "TALENT",
+          });
+
+        await producer.send({
+          topic,
+
+          messages: [
+            {
+              key:
+                firstUserId,
+
+              value:
+                JSON.stringify(
+                  newerEvent,
+                ),
+            },
+
+            {
+              key:
+                firstUserId,
+
+              value:
+                JSON.stringify(
+                  staleEvent,
+                ),
+            },
+
+            {
+              key:
+                firstUserId,
+
+              value:
+                JSON.stringify(
+                  sentinelEvent,
+                ),
+            },
+          ],
+        });
+
+        /*
+        * Wait until the first account
+        * reaches PROFESSIONAL.
+        */
+        await waitFor(
+          async () => {
+            const account =
+              await prisma.account.findUnique(
+                {
+                  where: {
+                    userId:
+                      firstUserId,
+                  },
+
+                  include: {
+                    talentProfile: true,
+                    professionalProfile:
+                      true,
+                  },
+                },
+              );
+
+            return (
+              account?.type ===
+                "PROFESSIONAL" &&
+              account.talentProfile ===
+                null &&
+              account.professionalProfile !==
+                null
+            );
+          },
+        );
+
+        /*
+        * The stale event must have been
+        * acknowledged.
+        */
+        await waitFor(
+          async () => {
+            const processedEvent =
+              await prisma.processedEvent.findUnique(
+                {
+                  where: {
+                    eventId:
+                      staleEvent.eventId,
+                  },
+                },
+              );
+
+            return (
+              processedEvent !==
+              null
+            );
+          },
+        );
+
+        /*
+        * Most important assertion:
+        *
+        * The stale event must NOT
+        * regress the account.
+        */
+        const firstAccount =
+          await prisma.account.findUnique(
+            {
+              where: {
+                userId:
+                  firstUserId,
+              },
+
+              include: {
+                talentProfile:
+                  true,
+
+                professionalProfile:
+                  true,
+              },
+            },
+          );
+
+        expect(
+          firstAccount?.type,
+        ).toBe("PROFESSIONAL");
+
+        expect(
+          firstAccount?.talentProfile,
+        ).toBeNull();
+
+        expect(
+          firstAccount?.professionalProfile,
+        ).not.toBeNull();
+
+        /*
+        * The sentinel event must also
+        * be processed.
+        *
+        * This proves that the stale
+        * event did not poison the Kafka
+        * partition.
+        */
+        await waitFor(
+          async () => {
+            const secondAccount =
+              await prisma.account.findUnique(
+                {
+                  where: {
+                    userId:
+                      secondUserId,
+                  },
+                },
+              );
+
+            return (
+              secondAccount?.type ===
+              "TALENT"
+            );
+          },
+        );
+
+        const newerProcessed =
+          await prisma.processedEvent.findUnique(
+            {
+              where: {
+                eventId:
+                  newerEvent.eventId,
+              },
+            },
+          );
+
+        const staleProcessed =
+          await prisma.processedEvent.findUnique(
+            {
+              where: {
+                eventId:
+                  staleEvent.eventId,
+              },
+            },
+          );
+
+        const sentinelProcessed =
+          await prisma.processedEvent.findUnique(
+            {
+              where: {
+                eventId:
+                  sentinelEvent.eventId,
+              },
+            },
+          );
+
+        expect(
+          newerProcessed,
+        ).not.toBeNull();
+
+        expect(
+          staleProcessed,
+        ).not.toBeNull();
+
+        expect(
+          sentinelProcessed,
+        ).not.toBeNull();
+
+        await cleanup(
+          [
+            firstUserId,
+            secondUserId,
+          ],
+          [
+            newerEvent.eventId,
+            staleEvent.eventId,
+            sentinelEvent.eventId,
+          ],
+        );
+      },
+    );
   },
 );

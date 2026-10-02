@@ -447,18 +447,20 @@ export async function startProfileEventsConsumer(
         parsedEvent.eventType ===
         "identity.account.type.changed"
       ) {
-        await accountTypeChangedUseCase.execute(
-          parsedEvent.event,
-        );
+        const result =
+          await accountTypeChangedUseCase.execute(
+            parsedEvent.event,
+          );
 
         console.log(
           JSON.stringify({
             message:
-              "Profile account-type-changed event processed",
+              result.outcome === "APPLIED"
+                ? "Profile account-type-changed event processed"
+                : "Profile stale account-type-changed event ignored",
 
             eventId:
-              parsedEvent.event
-                .eventId,
+              parsedEvent.event.eventId,
 
             userId:
               parsedEvent.event.payload
@@ -471,6 +473,9 @@ export async function startProfileEventsConsumer(
             newAccountType:
               parsedEvent.event.payload
                 .newAccountType,
+
+            outcome:
+              result.outcome,
           }),
         );
 

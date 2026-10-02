@@ -113,28 +113,76 @@ export class OutboxPublisher {
             }>
           >`
             SELECT
-              "id",
-              "eventId",
-              "eventType",
-              "aggregateType",
-              "aggregateId",
-              "payload",
-              "createdAt",
-              "attempts"
-            FROM "outbox_events"
-            WHERE "publishedAt" IS NULL
-              AND "failedAt" IS NULL
-              AND "attempts" < ${this.retryPolicy.maxAttempts}
+              event."id",
+              event."eventId",
+              event."eventType",
+              event."aggregateType",
+              event."aggregateId",
+              event."payload",
+              event."createdAt",
+              event."attempts"
+            FROM "outbox_events" AS event
+            WHERE event."publishedAt" IS NULL
+              AND event."failedAt" IS NULL
+              AND event."attempts" < ${this.retryPolicy.maxAttempts}
+
               AND (
-                "nextAttemptAt" IS NULL
-                OR "nextAttemptAt" <= ${now}
+                event."nextAttemptAt" IS NULL
+                OR event."nextAttemptAt" <= ${now}
               )
+
               AND (
-                "claimedAt" IS NULL
-                OR "claimedAt" < ${staleBefore}
+                event."claimedAt" IS NULL
+                OR event."claimedAt" < ${staleBefore}
               )
-            ORDER BY "createdAt" ASC
+
+              /*
+              * Strict per-aggregate ordering.
+              *
+              * An event may only be claimed when there is
+              * no older unpublished event for the same aggregate.
+              *
+              * Notice that failed events are also treated as
+              * blocking here because their publishedAt is still NULL.
+              *
+              * This prevents:
+              *
+              *   event #2 -> Kafka
+              *   event #1 -> Kafka
+              *
+              * for the same aggregate.
+              */
+              AND NOT EXISTS (
+                SELECT 1
+                FROM "outbox_events" AS previous
+                WHERE previous."aggregateType" =
+                      event."aggregateType"
+
+                  AND previous."aggregateId" =
+                      event."aggregateId"
+
+                  AND previous."publishedAt" IS NULL
+
+                  AND (
+                    previous."createdAt" <
+                      event."createdAt"
+
+                    OR (
+                      previous."createdAt" =
+                        event."createdAt"
+
+                      AND previous."id" <
+                        event."id"
+                    )
+                  )
+              )
+
+            ORDER BY
+              event."createdAt" ASC,
+              event."id" ASC
+
             LIMIT ${this.batchSize}
+
             FOR UPDATE SKIP LOCKED
           `;
 

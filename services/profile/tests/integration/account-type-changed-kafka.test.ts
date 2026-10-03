@@ -336,12 +336,32 @@ describe(
       });
 
       await waitFor(async () => {
-        const account = await prisma.account.findUnique({
-          where: { userId: secondUserId },
-          include: { talentProfile: true },
-        });
+        const firstAccount =
+          await prisma.account.findUnique({
+            where: {
+              userId: firstUserId,
+            },
+            include: {
+              talentProfile: true,
+            },
+          });
 
-        return account?.type === "TALENT" && account.talentProfile !== null;
+        const secondAccount =
+          await prisma.account.findUnique({
+            where: {
+              userId: secondUserId,
+            },
+            include: {
+              talentProfile: true,
+            },
+          });
+
+        return (
+          firstAccount?.type === "TALENT" &&
+          firstAccount.talentProfile !== null &&
+          secondAccount?.type === "TALENT" &&
+          secondAccount.talentProfile !== null
+        );
       });
 
       const firstAccount = await prisma.account.findUnique({
@@ -666,6 +686,7 @@ describe(
           ],
         );
       },
+      20_000,
     );
   },
 );

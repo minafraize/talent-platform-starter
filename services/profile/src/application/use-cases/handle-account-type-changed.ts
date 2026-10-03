@@ -1,4 +1,6 @@
-import type { PrismaClient } from "../../generated/prisma/index.js";
+import type {
+  PrismaClient,
+} from "../../generated/prisma/index.js";
 
 import type {
   AccountTypeChangedEvent,
@@ -13,6 +15,7 @@ type AccountTypeChangeResult = {
   processed: boolean;
   outcome:
     | "APPLIED"
+    | "APPLIED_WITH_GAP"
     | "IGNORED_STALE";
 };
 
@@ -33,23 +36,75 @@ export class HandleAccountTypeChangedUseCase {
   async execute(
     event: AccountTypeChangedEvent,
   ): Promise<AccountTypeChangeResult> {
+    const previousAccountType =
+      event.payload.previousAccountType;
+
+    const newAccountType =
+      event.payload.newAccountType;
+
+    const previousOrder =
+      ACCOUNT_TYPE_ORDER[
+        previousAccountType
+      ];
+
+    const targetOrder =
+      ACCOUNT_TYPE_ORDER[
+        newAccountType
+      ];
+
+    /*
+     * Identity only supports upgrades.
+     *
+     * Profile validates this independently
+     * because Kafka events are an external
+     * boundary from Profile's point of view.
+     */
+    if (newAccountType === "USER") {
+      throw new Error(
+        "Account upgrade event cannot target USER",
+      );
+    }
+
+    if (
+      previousOrder >= targetOrder
+    ) {
+      throw new Error(
+        `Invalid account type transition: ${previousAccountType} -> ${newAccountType}`,
+      );
+    }
+
     return this.prisma.$transaction(
       async (tx) => {
+        /*
+         * Idempotency must happen in the same
+         * transaction as the business mutation.
+         *
+         * First delivery:
+         *   inserted.count === 1
+         *
+         * Duplicate delivery:
+         *   inserted.count === 0
+         */
         const inserted =
           await tx.processedEvent.createMany({
             data: [
               {
-                eventId: event.eventId,
-                eventType: event.eventType,
+                eventId:
+                  event.eventId,
+
+                eventType:
+                  event.eventType,
               },
             ],
+
             skipDuplicates: true,
           });
 
         if (inserted.count === 0) {
           return {
             processed: false,
-            outcome: "IGNORED_STALE",
+            outcome:
+              "IGNORED_STALE",
           };
         }
 
@@ -59,9 +114,12 @@ export class HandleAccountTypeChangedUseCase {
               userId:
                 event.payload.userId,
             },
+
             include: {
               talentProfile: true,
-              professionalProfile: true,
+
+              professionalProfile:
+                true,
             },
           });
 
@@ -71,165 +129,130 @@ export class HandleAccountTypeChangedUseCase {
           );
         }
 
-        /*
-         * Identity never emits an upgrade
-         * targeting USER.
-         */
-        if (
-          event.payload.newAccountType ===
-          "USER"
-        ) {
-          throw new Error(
-            "Account upgrade event cannot target USER",
-          );
-        }
-
-        /*
-         * Expected normal flow:
-         *
-         * account.type === previousAccountType
-         *
-         * Example:
-         *
-         * TALENT
-         *   +
-         * TALENT -> PROFESSIONAL
-         *   =
-         * PROFESSIONAL
-         */
-
-        if (
-          account.type ===
-          event.payload.previousAccountType
-        ) {
-          await tx.account.update({
-            where: {
-              id: account.id,
-            },
-            data: {
-              type:
-                event.payload.newAccountType,
-            },
-          });
-
-          switch (event.payload.newAccountType) {
-            case "TALENT": {
-              if (account.professionalProfile) {
-                throw new Error(
-                  "Cannot convert account to TALENT while PROFESSIONAL profile exists",
-                );
-              }
-
-              if (!account.talentProfile) {
-                await tx.talentProfile.create({
-                  data: {
-                    accountId: account.id,
-                    status: "ACTIVE",
-                    score: 0,
-                  },
-                });
-              }
-
-              break;
-            }
-
-            case "PROFESSIONAL": {
-              if (account.talentProfile) {
-                await tx.talentProfile.delete({
-                  where: {
-                    accountId: account.id,
-                  },
-                });
-              }
-
-              if (!account.professionalProfile) {
-                await tx.professionalProfile.create({
-                  data: {
-                    accountId: account.id,
-                  },
-                });
-              }
-
-              break;
-            }
-
-            default: {
-              const exhaustiveCheck: never =
-                event.payload.newAccountType;
-
-              throw new Error(
-                `Unsupported target account type: ${exhaustiveCheck}`,
-              );
-            }
-          }
-
-          return {
-            processed: true,
-            outcome: "APPLIED",
-          };
-        }
-
-        /*
-         * The current Profile state is already
-         * at or beyond the event target.
-         *
-         * Example:
-         *
-         * Current:
-         *   PROFESSIONAL
-         *
-         * Old event:
-         *   USER -> TALENT
-         *
-         * Applying it would be invalid and
-         * would regress the aggregate.
-         *
-         * Treat it as a stale event and
-         * acknowledge it through processedEvent.
-         */
         const currentOrder =
           ACCOUNT_TYPE_ORDER[
             account.type
           ];
 
-        const targetOrder =
-          ACCOUNT_TYPE_ORDER[
-            event.payload
-              .newAccountType
-          ];
-
+        /*
+         * Profile is a monotonic projection.
+         *
+         * If it already reached or passed the
+         * target state, applying this event would
+         * either be unnecessary or would regress
+         * the projection.
+         */
         if (
-          currentOrder >=
-          targetOrder
+          currentOrder >= targetOrder
         ) {
           return {
             processed: false,
-            outcome: "IGNORED_STALE",
+            outcome:
+              "IGNORED_STALE",
           };
         }
 
         /*
-         * Current state is behind the event's
-         * declared previous state.
+         * Normal case:
          *
-         * Example:
+         *   Profile current state
+         *          ===
+         *   event.previousAccountType
          *
-         * Current:
-         *   USER
+         * Gap case:
          *
-         * Event:
-         *   TALENT -> PROFESSIONAL
+         *   Profile current state
+         *          <
+         *   event.previousAccountType
          *
-         * We must not skip this event because
-         * the preceding transition may not have
-         * reached Profile yet.
-         *
-         * Throwing keeps the Kafka offset
-         * uncommitted so the event can be retried.
+         * In the gap case, Identity is already
+         * authoritative, so Profile converges
+         * directly to the latest valid target.
          */
-        throw new Error(
-          `Account type mismatch: expected ${event.payload.previousAccountType}, found ${account.type}`,
-        );
+        const outcome =
+          currentOrder ===
+          previousOrder
+            ? "APPLIED"
+            : "APPLIED_WITH_GAP";
+
+        await tx.account.update({
+          where: {
+            id: account.id,
+          },
+
+          data: {
+            type: newAccountType,
+          },
+        });
+
+        switch (newAccountType) {
+          case "TALENT": {
+            /*
+             * PROFESSIONAL is a higher state and
+             * therefore should never coexist with
+             * TALENT.
+             */
+            if (
+              account.professionalProfile
+            ) {
+              throw new Error(
+                "Cannot convert account to TALENT while PROFESSIONAL profile exists",
+              );
+            }
+
+            if (
+              !account.talentProfile
+            ) {
+              await tx.talentProfile.create({
+                data: {
+                  accountId:
+                    account.id,
+
+                  status:
+                    "ACTIVE",
+
+                  score: 0,
+                },
+              });
+            }
+
+            break;
+          }
+
+          case "PROFESSIONAL": {
+            /*
+             * PROFESSIONAL supersedes TALENT.
+             */
+            if (
+              account.talentProfile
+            ) {
+              await tx.talentProfile.delete({
+                where: {
+                  accountId:
+                    account.id,
+                },
+              });
+            }
+
+            if (
+              !account.professionalProfile
+            ) {
+              await tx.professionalProfile.create({
+                data: {
+                  accountId:
+                    account.id,
+                },
+              });
+            }
+
+            break;
+          }
+        }
+
+        return {
+          processed: true,
+          outcome,
+        };
       },
     );
   }

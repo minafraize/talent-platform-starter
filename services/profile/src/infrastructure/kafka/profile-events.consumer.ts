@@ -4,7 +4,10 @@ import {
   type Consumer,
 } from "kafkajs";
 
-import type { PrismaClient } from "../../generated/prisma/index.js";
+import type {
+  PrismaClient,
+} from "../../generated/prisma/index.js";
+
 import { z } from "zod";
 
 import {
@@ -50,7 +53,9 @@ export interface ProfileEventsConsumerRuntime {
  * HandleUserCreatedUseCase, which uses a flattened internal DTO.
  */
 type IdentityUserCreatedEvent =
-  Parameters<UserCreatedHandler["execute"]>[0];
+  Parameters<
+    UserCreatedHandler["execute"]
+  >[0];
 
 /**
  * identity.account.type.changed is consumed using the shared
@@ -63,12 +68,16 @@ type IdentityAccountTypeChangedEvent =
 
 type ParsedProfileEvent =
   | {
-      eventType: "identity.user.created";
-      event: IdentityUserCreatedEvent;
+      eventType:
+        "identity.user.created";
+      event:
+        IdentityUserCreatedEvent;
     }
   | {
-      eventType: "identity.account.type.changed";
-      event: IdentityAccountTypeChangedEvent;
+      eventType:
+        "identity.account.type.changed";
+      event:
+        IdentityAccountTypeChangedEvent;
     };
 
 const AccountTypeSchema = z.enum([
@@ -86,25 +95,32 @@ const AccountTypeSchema = z.enum([
  */
 const LegacyUserCreatedEventSchema =
   z.object({
-    eventId: z.string().uuid(),
+    eventId:
+      z.string().uuid(),
 
-    eventType: z.literal(
-      "identity.user.created",
-    ),
+    eventType:
+      z.literal(
+        "identity.user.created",
+      ),
 
-    version: z.number().int().positive(),
+    version:
+      z.number().int().positive(),
 
-    producer: z.string(),
+    producer:
+      z.string(),
 
-    occurredAt: z.string(),
+    occurredAt:
+      z.string(),
 
     aggregateId:
       z.string().uuid().optional(),
 
     payload: z.object({
-      userId: z.string().uuid(),
+      userId:
+        z.string().uuid(),
 
-      email: z.string().email(),
+      email:
+        z.string().email(),
 
       accountType:
         AccountTypeSchema.optional(),
@@ -119,45 +135,33 @@ function parseMessage(
       buffer.toString("utf8"),
     );
 
-  /**
+  /*
    * -------------------------------------------------------------
    * identity.account.type.changed
    * -------------------------------------------------------------
    *
-   * IMPORTANT:
-   *
-   * This event must be passed to the use case using the complete
-   * shared event envelope.
-   *
-   * Do NOT flatten:
-   *
-   *   payload.userId
-   *   payload.previousAccountType
-   *   payload.newAccountType
-   *
-   * into the root event.
+   * This event is passed to the use case using
+   * the complete shared event envelope.
    */
   const accountTypeChangedResult =
     AccountTypeChangedEventSchema.safeParse(
       parsed,
     );
 
-  if (accountTypeChangedResult.success) {
+  if (
+    accountTypeChangedResult.success
+  ) {
     const event =
       accountTypeChangedResult.data;
 
     return {
       eventType:
         "identity.account.type.changed",
-
-      /**
-       * Keep the shared contract intact.
-       */
       event,
     };
   }
 
-  /**
+  /*
    * -------------------------------------------------------------
    * identity.user.created - current contract
    * -------------------------------------------------------------
@@ -167,7 +171,9 @@ function parseMessage(
       parsed,
     );
 
-  if (userCreatedResult.success) {
+  if (
+    userCreatedResult.success
+  ) {
     const event =
       userCreatedResult.data;
 
@@ -175,46 +181,53 @@ function parseMessage(
       eventType:
         "identity.user.created",
 
-      /**
-       * The existing HandleUserCreatedUseCase expects a flattened
-       * internal event DTO, so map the contract here.
-       */
       event: {
-        eventId: event.eventId,
-        eventType: event.eventType,
-        version: event.version,
-        producer: event.producer,
-        occurredAt: event.occurredAt,
-        userId: event.payload.userId,
+        eventId:
+          event.eventId,
+
+        eventType:
+          event.eventType,
+
+        version:
+          event.version,
+
+        producer:
+          event.producer,
+
+        occurredAt:
+          event.occurredAt,
+
+        userId:
+          event.payload.userId,
+
         accountType:
           event.payload.accountType,
-        email: event.payload.email,
+
+        email:
+          event.payload.email,
       },
     };
   }
 
-  /**
+  /*
    * -------------------------------------------------------------
    * identity.user.created - legacy compatibility
    * -------------------------------------------------------------
-   *
-   * Older events may have been produced before accountType
-   * became mandatory.
-   *
-   * We keep consuming them safely, but ignore them because
-   * Profile cannot determine which persona profile to create
-   * without accountType.
    */
   const legacyUserCreatedResult =
     LegacyUserCreatedEventSchema.safeParse(
       parsed,
     );
 
-  if (legacyUserCreatedResult.success) {
+  if (
+    legacyUserCreatedResult.success
+  ) {
     const event =
       legacyUserCreatedResult.data;
 
-    if (!event.payload.accountType) {
+    if (
+      !event.payload.accountType
+    ) {
       console.warn(
         JSON.stringify({
           message:
@@ -236,15 +249,29 @@ function parseMessage(
         "identity.user.created",
 
       event: {
-        eventId: event.eventId,
-        eventType: event.eventType,
-        version: event.version,
-        producer: event.producer,
-        occurredAt: event.occurredAt,
-        userId: event.payload.userId,
+        eventId:
+          event.eventId,
+
+        eventType:
+          event.eventType,
+
+        version:
+          event.version,
+
+        producer:
+          event.producer,
+
+        occurredAt:
+          event.occurredAt,
+
+        userId:
+          event.payload.userId,
+
         accountType:
           event.payload.accountType,
-        email: event.payload.email,
+
+        email:
+          event.payload.email,
       },
     };
   }
@@ -375,126 +402,135 @@ export async function startProfileEventsConsumer(
     topic,
 
     fromBeginning:
-      options.fromBeginning ?? false,
+      options.fromBeginning ??
+      false,
   });
 
   await consumer.run({
-    eachMessage: async ({
-      message,
-    }) => {
-      if (!message.value) {
-        return;
-      }
+    eachMessage:
+      async ({
+        message,
+      }) => {
+        if (!message.value) {
+          return;
+        }
 
-      const parsedEvent =
-        parseMessage(
-          message.value,
-        );
+        const parsedEvent =
+          parseMessage(
+            message.value,
+          );
 
-      if (!parsedEvent) {
-        return;
-      }
+        if (!parsedEvent) {
+          return;
+        }
 
-      /**
-       * ---------------------------------------------------------
-       * identity.user.created
-       * ---------------------------------------------------------
-       */
-      if (
-        parsedEvent.eventType ===
-        "identity.user.created"
-      ) {
-        await userCreatedUseCase.execute(
-          parsedEvent.event,
-        );
-
-        console.log(
-          JSON.stringify({
-            message:
-              "Profile user-created event processed",
-
-            eventId:
-              parsedEvent.event
-                .eventId,
-
-            userId:
-              parsedEvent.event
-                .userId,
-
-            accountType:
-              parsedEvent.event
-                .accountType,
-          }),
-        );
-
-        return;
-      }
-
-      /**
-       * ---------------------------------------------------------
-       * identity.account.type.changed
-       * ---------------------------------------------------------
-       *
-       * The event is the complete shared contract.
-       *
-       * Therefore the data lives under:
-       *
-       *   parsedEvent.event.payload.userId
-       *   parsedEvent.event.payload.previousAccountType
-       *   parsedEvent.event.payload.newAccountType
-       */
-      if (
-        parsedEvent.eventType ===
-        "identity.account.type.changed"
-      ) {
-        const result =
-          await accountTypeChangedUseCase.execute(
+        /*
+         * ---------------------------------------------------------
+         * identity.user.created
+         * ---------------------------------------------------------
+         */
+        if (
+          parsedEvent.eventType ===
+          "identity.user.created"
+        ) {
+          await userCreatedUseCase.execute(
             parsedEvent.event,
           );
 
-        console.log(
-          JSON.stringify({
-            message:
-              result.outcome === "APPLIED"
-                ? "Profile account-type-changed event processed"
-                : "Profile stale account-type-changed event ignored",
+          console.log(
+            JSON.stringify({
+              message:
+                "Profile user-created event processed",
 
-            eventId:
-              parsedEvent.event.eventId,
+              eventId:
+                parsedEvent.event
+                  .eventId,
 
-            userId:
-              parsedEvent.event.payload
-                .userId,
+              userId:
+                parsedEvent.event
+                  .userId,
 
-            previousAccountType:
-              parsedEvent.event.payload
-                .previousAccountType,
+              accountType:
+                parsedEvent.event
+                  .accountType,
+            }),
+          );
 
-            newAccountType:
-              parsedEvent.event.payload
-                .newAccountType,
+          return;
+        }
 
-            outcome:
-              result.outcome,
-          }),
+        /*
+         * ---------------------------------------------------------
+         * identity.account.type.changed
+         * ---------------------------------------------------------
+         */
+        if (
+          parsedEvent.eventType ===
+          "identity.account.type.changed"
+        ) {
+          const result =
+            await accountTypeChangedUseCase.execute(
+              parsedEvent.event,
+            );
+
+          let message =
+            "Profile account-type-changed event processed";
+
+          if (
+            result.outcome ===
+            "APPLIED_WITH_GAP"
+          ) {
+            message =
+              "Profile account-type-changed event processed with state gap";
+          }
+
+          if (
+            result.outcome ===
+            "IGNORED_STALE"
+          ) {
+            message =
+              "Profile stale account-type-changed event ignored";
+          }
+
+          console.log(
+            JSON.stringify({
+              message,
+
+              eventId:
+                parsedEvent.event
+                  .eventId,
+
+              userId:
+                parsedEvent.event
+                  .payload.userId,
+
+              previousAccountType:
+                parsedEvent.event
+                  .payload
+                  .previousAccountType,
+
+              newAccountType:
+                parsedEvent.event
+                  .payload
+                  .newAccountType,
+
+              outcome:
+                result.outcome,
+            }),
+          );
+
+          return;
+        }
+
+        const exhaustiveCheck: never =
+          parsedEvent;
+
+        throw new Error(
+          `Unsupported parsed profile event: ${String(
+            exhaustiveCheck,
+          )}`,
         );
-
-        return;
-      }
-
-      /**
-       * The discriminated union above means we should never reach
-       * this branch.
-       */
-      const exhaustiveCheck: never =
-        parsedEvent;
-
-      throw new Error(
-        `Unsupported parsed profile event: ${String(
-          exhaustiveCheck,
-        )}`,
-      );
-    },
+      },
   });
 
   if (readyPromise) {

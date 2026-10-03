@@ -137,21 +137,22 @@ export class OutboxPublisher {
               )
 
               /*
-              * Strict per-aggregate ordering.
-              *
-              * An event may only be claimed when there is
-              * no older unpublished event for the same aggregate.
-              *
-              * Notice that failed events are also treated as
-              * blocking here because their publishedAt is still NULL.
-              *
-              * This prevents:
-              *
-              *   event #2 -> Kafka
-              *   event #1 -> Kafka
-              *
-              * for the same aggregate.
-              */
+               * Strict ordering applies only to events
+               * that are still recoverable.
+               *
+               * A permanently failed event is retained
+               * for audit/replay, but it must not freeze
+               * newer business state transitions.
+               *
+               * Example:
+               *
+               *   USER -> TALENT       FAILED
+               *   TALENT -> PROFESSIONAL PENDING
+               *
+               * The second event is allowed to continue
+               * because Identity's authoritative state is
+               * already PROFESSIONAL.
+               */
               AND NOT EXISTS (
                 SELECT 1
                 FROM "outbox_events" AS previous
@@ -162,6 +163,8 @@ export class OutboxPublisher {
                       event."aggregateId"
 
                   AND previous."publishedAt" IS NULL
+
+                  AND previous."failedAt" IS NULL
 
                   AND (
                     previous."createdAt" <
@@ -237,7 +240,8 @@ export class OutboxPublisher {
     currentAttempts: number,
     error: unknown,
   ): Promise<void> {
-    const nextAttemptNumber = currentAttempts + 1;
+    const nextAttemptNumber =
+      currentAttempts + 1;
 
     if (
       nextAttemptNumber >=

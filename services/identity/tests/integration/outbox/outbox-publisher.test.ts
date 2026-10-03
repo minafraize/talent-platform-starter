@@ -574,4 +574,200 @@ describe("OutboxPublisher", () => {
       ]);
     },
   );
+
+  it(
+    "allows a later event after an earlier event permanently fails",
+    async () => {
+      const aggregateId =
+        crypto.randomUUID();
+
+      const firstEvent =
+        await prisma.outboxEvent.create({
+          data: {
+            eventId:
+              crypto.randomUUID(),
+
+            eventType:
+              "identity.account.type.changed",
+
+            aggregateType:
+              "User",
+
+            aggregateId,
+
+            createdAt:
+              new Date(
+                "2026-10-01T20:00:00.000Z",
+              ),
+
+            payload: {
+              userId:
+                aggregateId,
+
+              previousAccountType:
+                "USER",
+
+              newAccountType:
+                "TALENT",
+            },
+          },
+        });
+
+      const secondEvent =
+        await prisma.outboxEvent.create({
+          data: {
+            eventId:
+              crypto.randomUUID(),
+
+            eventType:
+              "identity.account.type.changed",
+
+            aggregateType:
+              "User",
+
+            aggregateId,
+
+            createdAt:
+              new Date(
+                "2026-10-01T20:00:01.000Z",
+              ),
+
+            payload: {
+              userId:
+                aggregateId,
+
+              previousAccountType:
+                "TALENT",
+
+              newAccountType:
+                "PROFESSIONAL",
+            },
+          },
+        });
+
+      const publishedEventIds: string[] =
+        [];
+
+      const publisher:
+        EventPublisher = {
+          async publish(input) {
+            const event =
+              input.event as {
+                eventId: string;
+              };
+
+            if (
+              event.eventId ===
+              firstEvent.eventId
+            ) {
+              throw new Error(
+                "PERMANENT_KAFKA_FAILURE",
+              );
+            }
+
+            publishedEventIds.push(
+              event.eventId,
+            );
+          },
+        };
+
+      /*
+      * maxAttempts = 1 means the first event
+      * becomes permanently failed immediately.
+      */
+      const retryPolicy =
+        new OutboxRetryPolicy({
+          baseDelayMs: 1,
+          maxDelayMs: 10,
+          jitterRatio: 0,
+          maxAttempts: 1,
+        });
+
+      const outboxPublisher =
+        new OutboxPublisher(
+          prisma,
+          publisher,
+          {
+            topic:
+              "identity.events",
+
+            workerId:
+              "permanent-failure-worker",
+
+            batchSize:
+              1,
+
+            retryPolicy,
+          },
+        );
+
+      /*
+      * First event must fail permanently.
+      */
+      const firstCount =
+        await outboxPublisher.publishPending();
+
+      expect(firstCount).toBe(0);
+
+      const failedEvent =
+        await prisma.outboxEvent.findUnique({
+          where: {
+            id: firstEvent.id,
+          },
+        });
+
+      expect(
+        failedEvent?.failedAt,
+      ).not.toBeNull();
+
+      expect(
+        failedEvent?.publishedAt,
+      ).toBeNull();
+
+      /*
+      * The failed event must no longer block
+      * the newer event for the same User.
+      */
+      const secondCount =
+        await outboxPublisher.publishPending();
+
+      expect(secondCount).toBe(1);
+
+      expect(
+        publishedEventIds,
+      ).toEqual([
+        secondEvent.eventId,
+      ]);
+
+      const publishedSecondEvent =
+        await prisma.outboxEvent.findUnique(
+          {
+            where: {
+              id: secondEvent.id,
+            },
+          },
+        );
+
+      expect(
+        publishedSecondEvent?.publishedAt,
+      ).not.toBeNull();
+
+      /*
+      * The original failed event is preserved
+      * for audit/replay.
+      */
+      const preservedFailedEvent =
+        await prisma.outboxEvent.findUnique(
+          {
+            where: {
+              id: firstEvent.id,
+            },
+          },
+        );
+
+      expect(
+        preservedFailedEvent?.failedAt,
+      ).not.toBeNull();
+    },
+  );
 });

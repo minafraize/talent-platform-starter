@@ -6,6 +6,10 @@ import type {
   AccountTypeChangedEvent,
 } from "@talent/event-schemas";
 
+import type {
+  ProfileFailureInjector,
+} from "../ports/profile-failure-injector.js";
+
 type AccountType =
   | "USER"
   | "TALENT"
@@ -13,6 +17,7 @@ type AccountType =
 
 type AccountTypeChangeResult = {
   processed: boolean;
+
   outcome:
     | "APPLIED"
     | "APPLIED_WITH_GAP"
@@ -31,6 +36,14 @@ const ACCOUNT_TYPE_ORDER: Record<
 export class HandleAccountTypeChangedUseCase {
   constructor(
     private readonly prisma: PrismaClient,
+
+    private readonly failureInjector: ProfileFailureInjector = {
+      shouldFailAfterAccountCreation:
+        () => false,
+
+      shouldFailAfterAccountTypeChange:
+        () => false,
+    },
   ) {}
 
   async execute(
@@ -103,6 +116,7 @@ export class HandleAccountTypeChangedUseCase {
         if (inserted.count === 0) {
           return {
             processed: false,
+
             outcome:
               "IGNORED_STALE",
           };
@@ -147,6 +161,7 @@ export class HandleAccountTypeChangedUseCase {
         ) {
           return {
             processed: false,
+
             outcome:
               "IGNORED_STALE",
           };
@@ -177,11 +192,13 @@ export class HandleAccountTypeChangedUseCase {
 
         await tx.account.update({
           where: {
-            id: account.id,
+            id:
+              account.id,
           },
 
           data: {
-            type: newAccountType,
+            type:
+              newAccountType,
           },
         });
 
@@ -211,7 +228,8 @@ export class HandleAccountTypeChangedUseCase {
                   status:
                     "ACTIVE",
 
-                  score: 0,
+                  score:
+                    0,
                 },
               });
             }
@@ -249,8 +267,35 @@ export class HandleAccountTypeChangedUseCase {
           }
         }
 
+        /*
+         * Failure injection intentionally happens
+         * after the projection mutation but before
+         * the transaction commits.
+         *
+         * This proves that:
+         *
+         *   account update
+         *   persona update
+         *   processedEvent
+         *
+         * are committed atomically.
+         *
+         * If this throws, KafkaJS receives the error
+         * and the message remains eligible for retry.
+         */
+        if (
+          this.failureInjector
+            .shouldFailAfterAccountTypeChange()
+        ) {
+          throw new Error(
+            "PROFILE_ACCOUNT_TYPE_TRANSACTION_FAILURE",
+          );
+        }
+
         return {
-          processed: true,
+          processed:
+            true,
+
           outcome,
         };
       },

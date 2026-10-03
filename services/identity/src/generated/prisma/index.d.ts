@@ -85,7 +85,8 @@ export const SecurityEventType: {
   LOGOUT: 'LOGOUT',
   PASSWORD_CHANGED: 'PASSWORD_CHANGED',
   SESSION_REVOKED: 'SESSION_REVOKED',
-  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED'
+  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
+  ACCOUNT_TYPE_CHANGED: 'ACCOUNT_TYPE_CHANGED'
 };
 
 export type SecurityEventType = (typeof SecurityEventType)[keyof typeof SecurityEventType]

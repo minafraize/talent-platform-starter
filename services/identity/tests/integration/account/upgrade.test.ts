@@ -17,8 +17,18 @@ import {
   prisma,
 } from "../../../src/infrastructure/database/prisma.js";
 
+import {
+  hashIp,
+} from "../../../src/infrastructure/security/ip-hash.js";
+
 const PASSWORD =
   "StrongPassword123!";
+
+const TEST_REMOTE_ADDRESS =
+  "127.0.0.6";
+
+const TEST_USER_AGENT =
+  "vitest-account-upgrade";
 
 interface LoginResponse {
   success: boolean;
@@ -91,6 +101,9 @@ async function registerAndLogin(
       url:
         "/v1/auth/login",
 
+      remoteAddress:
+        TEST_REMOTE_ADDRESS,
+
       headers: {
         "content-type":
           "application/json",
@@ -156,7 +169,7 @@ describe(
     });
 
     it(
-      "upgrades USER -> TALENT",
+      "upgrades USER -> TALENT and creates an audit event",
       async () => {
         const {
           userId,
@@ -173,9 +186,15 @@ describe(
             url:
               "/v1/account/upgrade",
 
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
+
             headers: {
               authorization:
                 `Bearer ${accessToken}`,
+
+              "user-agent":
+                TEST_USER_AGENT,
             },
 
             payload: {
@@ -259,6 +278,45 @@ describe(
           newAccountType:
             "TALENT",
         });
+
+        const auditEvents =
+          await prisma.securityEvent.findMany({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          auditEvents,
+        ).toHaveLength(1);
+
+        expect(
+          auditEvents[0],
+        ).toMatchObject({
+          userId,
+
+          type:
+            "ACCOUNT_TYPE_CHANGED",
+
+          ipHash:
+            hashIp(
+              TEST_REMOTE_ADDRESS,
+            ),
+
+          userAgent:
+            TEST_USER_AGENT,
+
+          metadata: {
+            previousAccountType:
+              "USER",
+
+            newAccountType:
+              "TALENT",
+          },
+        });
       },
     );
 
@@ -279,6 +337,9 @@ describe(
 
             url:
               "/v1/account/upgrade",
+
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
 
             headers: {
               authorization:
@@ -333,6 +394,9 @@ describe(
             url:
               "/v1/account/upgrade",
 
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
+
             headers: {
               authorization:
                 `Bearer ${accessToken}`,
@@ -386,9 +450,15 @@ describe(
             url:
               "/v1/account/upgrade",
 
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
+
             headers: {
               authorization:
                 `Bearer ${accessToken}`,
+
+              "user-agent":
+                TEST_USER_AGENT,
             },
 
             payload: {
@@ -416,6 +486,20 @@ describe(
           firstEventCount,
         ).toBe(1);
 
+        const firstAuditEventCount =
+          await prisma.securityEvent.count({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          firstAuditEventCount,
+        ).toBe(1);
+
         const secondResponse =
           await app.inject({
             method: "POST",
@@ -423,9 +507,15 @@ describe(
             url:
               "/v1/account/upgrade",
 
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
+
             headers: {
               authorization:
                 `Bearer ${accessToken}`,
+
+              "user-agent":
+                TEST_USER_AGENT,
             },
 
             payload: {
@@ -483,6 +573,20 @@ describe(
         expect(
           secondEventCount,
         ).toBe(1);
+
+        const secondAuditEventCount =
+          await prisma.securityEvent.count({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          secondAuditEventCount,
+        ).toBe(1);
       },
     );
 
@@ -514,6 +618,9 @@ describe(
 
             url:
               "/v1/account/upgrade",
+
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
 
             headers: {
               authorization:
@@ -587,6 +694,20 @@ describe(
         expect(
           eventCount,
         ).toBe(0);
+
+        const auditEventCount =
+          await prisma.securityEvent.count({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          auditEventCount,
+        ).toBe(0);
       },
     );
 
@@ -621,6 +742,9 @@ describe(
 
             url:
               "/v1/account/upgrade",
+
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
 
             headers: {
               authorization:
@@ -694,6 +818,20 @@ describe(
         expect(
           eventCount,
         ).toBe(0);
+
+        const auditEventCount =
+          await prisma.securityEvent.count({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          auditEventCount,
+        ).toBe(0);
       },
     );
 
@@ -714,6 +852,9 @@ describe(
 
             url:
               "/v1/account/upgrade",
+
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
 
             headers: {
               authorization:
@@ -760,6 +901,20 @@ describe(
         expect(
           event,
         ).toBeNull();
+
+        const auditEvent =
+          await prisma.securityEvent.findFirst({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          auditEvent,
+        ).toBeNull();
       },
     );
 
@@ -780,6 +935,9 @@ describe(
 
             url:
               "/v1/account/upgrade",
+
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
 
             headers: {
               authorization:
@@ -813,6 +971,20 @@ describe(
         ).toBe(
           "PROFESSIONAL",
         );
+
+        const auditEvent =
+          await prisma.securityEvent.findFirst({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          auditEvent,
+        ).toBeNull();
       },
     );
 
@@ -833,6 +1005,9 @@ describe(
 
             url:
               "/v1/account/upgrade",
+
+            remoteAddress:
+              TEST_REMOTE_ADDRESS,
 
             headers: {
               authorization:
@@ -875,6 +1050,20 @@ describe(
 
         expect(
           eventCount,
+        ).toBe(0);
+
+        const auditEventCount =
+          await prisma.securityEvent.count({
+            where: {
+              userId,
+
+              type:
+                "ACCOUNT_TYPE_CHANGED",
+            },
+          });
+
+        expect(
+          auditEventCount,
         ).toBe(0);
       },
     );

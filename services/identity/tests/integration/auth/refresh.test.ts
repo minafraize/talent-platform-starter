@@ -13,6 +13,7 @@ import { hashToken } from "../../../src/infrastructure/security/token-hash.js";
 
 describe("POST /v1/auth/refresh", () => {
   const app = buildApp();
+  const TEST_REMOTE_ADDRESS = "127.0.0.5";
 
   beforeAll(async () => {
     await app.ready();
@@ -58,6 +59,7 @@ describe("POST /v1/auth/refresh", () => {
     const loginResponse = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email,
         password,
@@ -265,6 +267,7 @@ describe("POST /v1/auth/refresh", () => {
     const loginResponse = await app.inject({
         method: "POST",
         url: "/v1/auth/login",
+        remoteAddress: TEST_REMOTE_ADDRESS,
         payload: {
         email,
         password,
@@ -357,6 +360,7 @@ it("does not create more than one rotated token during concurrent refresh", asyn
     const loginResponse = await app.inject({
         method: "POST",
         url: "/v1/auth/login",
+        remoteAddress: TEST_REMOTE_ADDRESS,
         payload: {
         email,
         password,

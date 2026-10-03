@@ -29,8 +29,11 @@ import type {
 
 interface ProfileEventsConsumerOptions {
   topic?: string;
+
   groupId?: string;
+
   fromBeginning?: boolean;
+
   failureInjector?: ProfileFailureInjector;
 
   /**
@@ -41,6 +44,7 @@ interface ProfileEventsConsumerOptions {
    * producer may publish immediately after the consumer starts.
    */
   waitForReady?: boolean;
+
   readyTimeoutMs?: number;
 }
 
@@ -70,21 +74,24 @@ type ParsedProfileEvent =
   | {
       eventType:
         "identity.user.created";
+
       event:
         IdentityUserCreatedEvent;
     }
   | {
       eventType:
         "identity.account.type.changed";
+
       event:
         IdentityAccountTypeChangedEvent;
     };
 
-const AccountTypeSchema = z.enum([
-  "USER",
-  "TALENT",
-  "PROFESSIONAL",
-]);
+const AccountTypeSchema =
+  z.enum([
+    "USER",
+    "TALENT",
+    "PROFESSIONAL",
+  ]);
 
 /**
  * Backward-compatible schema for old identity.user.created events
@@ -115,16 +122,17 @@ const LegacyUserCreatedEventSchema =
     aggregateId:
       z.string().uuid().optional(),
 
-    payload: z.object({
-      userId:
-        z.string().uuid(),
+    payload:
+      z.object({
+        userId:
+          z.string().uuid(),
 
-      email:
-        z.string().email(),
+        email:
+          z.string().email(),
 
-      accountType:
-        AccountTypeSchema.optional(),
-    }),
+        accountType:
+          AccountTypeSchema.optional(),
+      }),
   });
 
 function parseMessage(
@@ -157,6 +165,7 @@ function parseMessage(
     return {
       eventType:
         "identity.account.type.changed",
+
       event,
     };
   }
@@ -286,8 +295,12 @@ async function waitForConsumerReady(
   timeoutMs: number,
 ): Promise<void> {
   await new Promise<void>(
-    (resolve, reject) => {
-      let settled = false;
+    (
+      resolve,
+      reject,
+    ) => {
+      let settled =
+        false;
 
       const finish = (
         callback: () => void,
@@ -296,25 +309,27 @@ async function waitForConsumerReady(
           return;
         }
 
-        settled = true;
+        settled =
+          true;
 
         clearTimeout(timer);
 
         callback();
       };
 
-      const timer = setTimeout(
-        () => {
-          finish(() => {
-            reject(
-              new Error(
-                `Kafka consumer did not join its group within ${timeoutMs}ms`,
-              ),
-            );
-          });
-        },
-        timeoutMs,
-      );
+      const timer =
+        setTimeout(
+          () => {
+            finish(() => {
+              reject(
+                new Error(
+                  `Kafka consumer did not join its group within ${timeoutMs}ms`,
+                ),
+              );
+            });
+          },
+          timeoutMs,
+        );
 
       consumer.on(
         consumer.events.GROUP_JOIN,
@@ -343,37 +358,48 @@ export async function startProfileEventsConsumer(
   prisma: PrismaClient,
   options: ProfileEventsConsumerOptions = {},
 ): Promise<ProfileEventsConsumerRuntime> {
-  const kafka = new Kafka({
-    clientId:
-      "profile-service",
+  const kafka =
+    new Kafka({
+      clientId:
+        "profile-service",
 
-    brokers: (
-      process.env.KAFKA_BROKERS ??
-      "localhost:9092"
-    ).split(","),
+      brokers: (
+        process.env.KAFKA_BROKERS ??
+        "localhost:9092"
+      ).split(","),
 
-    logLevel:
-      logLevel.INFO,
+      logLevel:
+        logLevel.INFO,
 
-    retry: {
-      initialRetryTime: 100,
-      factor: 1,
-      multiplier: 1,
-      retries: 5,
-    },
-  });
+      retry: {
+        initialRetryTime:
+          100,
 
-  const consumer: Consumer =
-    kafka.consumer({
-      groupId:
-        options.groupId ??
-        process.env.KAFKA_PROFILE_GROUP_ID ??
-        "profile-service-v1",
+        factor:
+          1,
+
+        multiplier:
+          1,
+
+        retries:
+          5,
+      },
     });
+
+  const consumer:
+    Consumer =
+      kafka.consumer({
+        groupId:
+          options.groupId ??
+          process.env
+            .KAFKA_PROFILE_GROUP_ID ??
+          "profile-service-v1",
+      });
 
   const topic =
     options.topic ??
-    process.env.KAFKA_IDENTITY_TOPIC ??
+    process.env
+      .KAFKA_IDENTITY_TOPIC ??
     "identity.events";
 
   const userCreatedUseCase =
@@ -385,6 +411,8 @@ export async function startProfileEventsConsumer(
   const accountTypeChangedUseCase =
     new HandleAccountTypeChangedUseCase(
       prisma,
+
+      options.failureInjector,
     );
 
   const readyPromise =
@@ -473,14 +501,14 @@ export async function startProfileEventsConsumer(
               parsedEvent.event,
             );
 
-          let message =
+          let logMessage =
             "Profile account-type-changed event processed";
 
           if (
             result.outcome ===
             "APPLIED_WITH_GAP"
           ) {
-            message =
+            logMessage =
               "Profile account-type-changed event processed with state gap";
           }
 
@@ -488,13 +516,14 @@ export async function startProfileEventsConsumer(
             result.outcome ===
             "IGNORED_STALE"
           ) {
-            message =
+            logMessage =
               "Profile stale account-type-changed event ignored";
           }
 
           console.log(
             JSON.stringify({
-              message,
+              message:
+                logMessage,
 
               eventId:
                 parsedEvent.event
@@ -502,7 +531,8 @@ export async function startProfileEventsConsumer(
 
               userId:
                 parsedEvent.event
-                  .payload.userId,
+                  .payload
+                  .userId,
 
               previousAccountType:
                 parsedEvent.event
@@ -522,7 +552,8 @@ export async function startProfileEventsConsumer(
           return;
         }
 
-        const exhaustiveCheck: never =
+        const exhaustiveCheck:
+          never =
           parsedEvent;
 
         throw new Error(

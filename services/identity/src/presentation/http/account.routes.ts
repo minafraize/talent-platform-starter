@@ -22,6 +22,10 @@ import type {
   UpgradeAccountUseCase,
 } from "../../application/use-cases/upgrade-account.js";
 
+import {
+  hashIp,
+} from "../../infrastructure/security/ip-hash.js";
+
 interface AccountRoutesOptions {
   upgradeAccount: UpgradeAccountUseCase;
 }
@@ -152,11 +156,29 @@ export async function accountRoutes(
           });
       }
 
+      const userAgentHeader =
+        request.headers["user-agent"];
+
+      const userAgent =
+        Array.isArray(userAgentHeader)
+          ? userAgentHeader.join(", ")
+          : userAgentHeader;
+
       const result =
         await options.upgradeAccount.execute({
           userId,
+
           targetAccountType:
             parsed.data.targetAccountType,
+
+          ipHash:
+            hashIp(request.ip),
+
+          ...(userAgent !== undefined
+            ? {
+                userAgent,
+              }
+            : {}),
         });
 
       return reply

@@ -12,6 +12,7 @@ import { prisma } from "../../../src/infrastructure/database/prisma.js";
 
 describe("POST /v1/auth/login", () => {
   const app = buildApp();
+  const TEST_REMOTE_ADDRESS = "127.0.0.4";
 
   beforeAll(async () => {
     await app.ready();
@@ -62,6 +63,7 @@ describe("POST /v1/auth/login", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email,
         password,
@@ -156,6 +158,7 @@ describe("POST /v1/auth/login", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email,
         password: "WrongPassword123!",
@@ -195,6 +198,7 @@ describe("POST /v1/auth/login", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS, 
       payload: {
         email: "does-not-exist@example.com",
         password: "StrongPassword123!",
@@ -234,6 +238,7 @@ describe("POST /v1/auth/login", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
+      remoteAddress: TEST_REMOTE_ADDRESS,
       payload: {
         email: "not-an-email",
         password: "StrongPassword123!",
@@ -285,6 +290,7 @@ describe("POST /v1/auth/login", () => {
       const response = await app.inject({
         method: "POST",
         url: "/v1/auth/login",
+        remoteAddress: TEST_REMOTE_ADDRESS,
         payload: {
           email,
           password: "WrongPassword123!",
@@ -304,6 +310,7 @@ describe("POST /v1/auth/login", () => {
       await app.inject({
         method: "POST",
         url: "/v1/auth/login",
+        remoteAddress: TEST_REMOTE_ADDRESS,
         payload: {
           email,
           password: "WrongPassword123!",

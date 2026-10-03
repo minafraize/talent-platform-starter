@@ -16,6 +16,8 @@ import {
 export interface UpgradeAccountInput {
   userId: string;
   targetAccountType: AccountType;
+  ipHash?: string;
+  userAgent?: string;
 }
 
 export interface UpgradeAccountOutput {
@@ -114,8 +116,9 @@ export class UpgradeAccountUseCase {
          *   TALENT -> TALENT
          *   -> 200
          *
-         * No new state transition and no duplicate
-         * outbox event are created.
+         * No new state transition,
+         * no duplicate outbox event,
+         * and no duplicate audit event are created.
          */
         if (
           currentAccountType ===
@@ -189,10 +192,10 @@ export class UpgradeAccountUseCase {
         }
 
         /*
-         * The account state change and its event
-         * are committed atomically.
+         * The account state change, integration event,
+         * and security audit event are committed atomically.
          *
-         * Either both exist or neither exists.
+         * Either all three exist or none of them exist.
          */
         await tx.outboxEvent.create({
           data: {
@@ -219,6 +222,41 @@ export class UpgradeAccountUseCase {
                 input.targetAccountType,
             },
           },
+        });
+
+        const securityEventData = {
+          userId:
+            input.userId,
+
+          type:
+            "ACCOUNT_TYPE_CHANGED" as const,
+
+          ...(input.ipHash !== undefined
+            ? {
+                ipHash:
+                  input.ipHash,
+              }
+            : {}),
+
+          ...(input.userAgent !== undefined
+            ? {
+                userAgent:
+                  input.userAgent,
+              }
+            : {}),
+
+          metadata: {
+            previousAccountType:
+              currentAccountType,
+
+            newAccountType:
+              input.targetAccountType,
+          },
+        };
+
+        await tx.securityEvent.create({
+          data:
+            securityEventData,
         });
 
         return {

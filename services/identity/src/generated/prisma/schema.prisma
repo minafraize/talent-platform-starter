@@ -38,6 +38,7 @@ enum SecurityEventType {
   PASSWORD_CHANGED
   SESSION_REVOKED
   ACCOUNT_LOCKED
+  ACCOUNT_TYPE_CHANGED
 }
 
 model User {

@@ -2,18 +2,12 @@ import {
   Kafka,
   logLevel,
   type Consumer,
+  type Producer,
 } from "kafkajs";
 
 import type {
   PrismaClient,
 } from "../../generated/prisma/index.js";
-
-import { z } from "zod";
-
-import {
-  AccountTypeChangedEventSchema,
-  UserCreatedEventSchema,
-} from "@talent/event-schemas";
 
 import {
   HandleAccountTypeChangedUseCase,
@@ -27,272 +21,50 @@ import type {
   ProfileFailureInjector,
 } from "../../application/ports/profile-failure-injector.js";
 
+import {
+  parseProfileEvent,
+  ProfileEventParseError,
+} from "./profile-event.parser.js";
+
+import {
+  createProfileDeadLetterRecord,
+  type DeadLetterReason,
+} from "./profile-event-dlq.js";
+
 interface ProfileEventsConsumerOptions {
-  topic?: string;
+  topic?:
+    string;
 
-  groupId?: string;
+  groupId?:
+    string;
 
-  fromBeginning?: boolean;
+  fromBeginning?:
+    boolean;
 
-  failureInjector?: ProfileFailureInjector;
+  failureInjector?:
+    ProfileFailureInjector;
 
-  /**
-   * When true, wait until Kafka assigns this consumer to its group
-   * before resolving startProfileEventsConsumer().
-   *
-   * This is useful for deterministic E2E/integration tests where the
-   * producer may publish immediately after the consumer starts.
-   */
-  waitForReady?: boolean;
+  dlqTopic?:
+    string;
 
-  readyTimeoutMs?: number;
+  waitForReady?:
+    boolean;
+
+  readyTimeoutMs?:
+    number;
 }
 
 export interface ProfileEventsConsumerRuntime {
-  stop(): Promise<void>;
-}
-
-/**
- * identity.user.created is currently consumed by the existing
- * HandleUserCreatedUseCase, which uses a flattened internal DTO.
- */
-type IdentityUserCreatedEvent =
-  Parameters<
-    UserCreatedHandler["execute"]
-  >[0];
-
-/**
- * identity.account.type.changed is consumed using the shared
- * AccountTypeChangedEvent contract directly.
- */
-type IdentityAccountTypeChangedEvent =
-  Parameters<
-    HandleAccountTypeChangedUseCase["execute"]
-  >[0];
-
-type ParsedProfileEvent =
-  | {
-      eventType:
-        "identity.user.created";
-
-      event:
-        IdentityUserCreatedEvent;
-    }
-  | {
-      eventType:
-        "identity.account.type.changed";
-
-      event:
-        IdentityAccountTypeChangedEvent;
-    };
-
-const AccountTypeSchema =
-  z.enum([
-    "USER",
-    "TALENT",
-    "PROFESSIONAL",
-  ]);
-
-/**
- * Backward-compatible schema for old identity.user.created events
- * that may not contain accountType yet.
- *
- * Current contract requires accountType, but older Kafka messages may
- * still exist in the topic.
- */
-const LegacyUserCreatedEventSchema =
-  z.object({
-    eventId:
-      z.string().uuid(),
-
-    eventType:
-      z.literal(
-        "identity.user.created",
-      ),
-
-    version:
-      z.number().int().positive(),
-
-    producer:
-      z.string(),
-
-    occurredAt:
-      z.string(),
-
-    aggregateId:
-      z.string().uuid().optional(),
-
-    payload:
-      z.object({
-        userId:
-          z.string().uuid(),
-
-        email:
-          z.string().email(),
-
-        accountType:
-          AccountTypeSchema.optional(),
-      }),
-  });
-
-function parseMessage(
-  buffer: Buffer,
-): ParsedProfileEvent | null {
-  const parsed: unknown =
-    JSON.parse(
-      buffer.toString("utf8"),
-    );
-
-  /*
-   * -------------------------------------------------------------
-   * identity.account.type.changed
-   * -------------------------------------------------------------
-   *
-   * This event is passed to the use case using
-   * the complete shared event envelope.
-   */
-  const accountTypeChangedResult =
-    AccountTypeChangedEventSchema.safeParse(
-      parsed,
-    );
-
-  if (
-    accountTypeChangedResult.success
-  ) {
-    const event =
-      accountTypeChangedResult.data;
-
-    return {
-      eventType:
-        "identity.account.type.changed",
-
-      event,
-    };
-  }
-
-  /*
-   * -------------------------------------------------------------
-   * identity.user.created - current contract
-   * -------------------------------------------------------------
-   */
-  const userCreatedResult =
-    UserCreatedEventSchema.safeParse(
-      parsed,
-    );
-
-  if (
-    userCreatedResult.success
-  ) {
-    const event =
-      userCreatedResult.data;
-
-    return {
-      eventType:
-        "identity.user.created",
-
-      event: {
-        eventId:
-          event.eventId,
-
-        eventType:
-          event.eventType,
-
-        version:
-          event.version,
-
-        producer:
-          event.producer,
-
-        occurredAt:
-          event.occurredAt,
-
-        userId:
-          event.payload.userId,
-
-        accountType:
-          event.payload.accountType,
-
-        email:
-          event.payload.email,
-      },
-    };
-  }
-
-  /*
-   * -------------------------------------------------------------
-   * identity.user.created - legacy compatibility
-   * -------------------------------------------------------------
-   */
-  const legacyUserCreatedResult =
-    LegacyUserCreatedEventSchema.safeParse(
-      parsed,
-    );
-
-  if (
-    legacyUserCreatedResult.success
-  ) {
-    const event =
-      legacyUserCreatedResult.data;
-
-    if (
-      !event.payload.accountType
-    ) {
-      console.warn(
-        JSON.stringify({
-          message:
-            "Skipping legacy identity.user.created event without accountType",
-
-          eventId:
-            event.eventId,
-
-          userId:
-            event.payload.userId,
-        }),
-      );
-
-      return null;
-    }
-
-    return {
-      eventType:
-        "identity.user.created",
-
-      event: {
-        eventId:
-          event.eventId,
-
-        eventType:
-          event.eventType,
-
-        version:
-          event.version,
-
-        producer:
-          event.producer,
-
-        occurredAt:
-          event.occurredAt,
-
-        userId:
-          event.payload.userId,
-
-        accountType:
-          event.payload.accountType,
-
-        email:
-          event.payload.email,
-      },
-    };
-  }
-
-  throw new Error(
-    "Unsupported or invalid identity event",
-  );
+  stop():
+    Promise<void>;
 }
 
 async function waitForConsumerReady(
-  consumer: Consumer,
-  timeoutMs: number,
+  consumer:
+    Consumer,
+
+  timeoutMs:
+    number,
 ): Promise<void> {
   await new Promise<void>(
     (
@@ -303,16 +75,21 @@ async function waitForConsumerReady(
         false;
 
       const finish = (
-        callback: () => void,
+        callback:
+          () => void,
       ): void => {
-        if (settled) {
+        if (
+          settled
+        ) {
           return;
         }
 
         settled =
           true;
 
-        clearTimeout(timer);
+        clearTimeout(
+          timer,
+        );
 
         callback();
       };
@@ -354,9 +131,93 @@ async function waitForConsumerReady(
   );
 }
 
+async function publishDeadLetter(
+  producer:
+    Producer,
+
+  dlqTopic:
+    string,
+
+  metadata: {
+    reason:
+      DeadLetterReason;
+
+    error:
+      string;
+
+    topic:
+      string;
+
+    partition:
+      number;
+
+    offset:
+      string;
+
+    key:
+      string | null;
+
+    timestamp:
+      string | null;
+
+    rawValue:
+      string | null;
+  },
+): Promise<void> {
+  const record =
+    createProfileDeadLetterRecord(
+      metadata,
+    );
+
+  await producer.send({
+    topic:
+      dlqTopic,
+
+    messages: [
+      {
+        key:
+          metadata.key ??
+          undefined,
+
+        value:
+          JSON.stringify(
+            record,
+          ),
+      },
+    ],
+  });
+
+  console.error(
+    JSON.stringify({
+      message:
+        "Profile Kafka event moved to DLQ",
+
+      reason:
+        metadata.reason,
+
+      sourceTopic:
+        metadata.topic,
+
+      partition:
+        metadata.partition,
+
+      offset:
+        metadata.offset,
+
+      dlqTopic,
+
+      error:
+        metadata.error,
+    }),
+  );
+}
+
 export async function startProfileEventsConsumer(
-  prisma: PrismaClient,
-  options: ProfileEventsConsumerOptions = {},
+  prisma:
+    PrismaClient,
+
+  options:
+    ProfileEventsConsumerOptions = {},
 ): Promise<ProfileEventsConsumerRuntime> {
   const kafka =
     new Kafka({
@@ -388,19 +249,38 @@ export async function startProfileEventsConsumer(
 
   const consumer:
     Consumer =
-      kafka.consumer({
-        groupId:
-          options.groupId ??
-          process.env
-            .KAFKA_PROFILE_GROUP_ID ??
-          "profile-service-v1",
-      });
+    kafka.consumer({
+      groupId:
+        options.groupId ??
+        process.env
+          .KAFKA_PROFILE_GROUP_ID ??
+        "profile-service-v1",
+    });
+
+  const producer:
+    Producer =
+    kafka.producer();
 
   const topic =
     options.topic ??
     process.env
       .KAFKA_IDENTITY_TOPIC ??
     "identity.events";
+
+  const dlqTopic =
+    options.dlqTopic ??
+    process.env
+      .KAFKA_PROFILE_DLQ_TOPIC ??
+    `${topic}.dlq`;
+
+  if (
+    topic ===
+    dlqTopic
+  ) {
+    throw new Error(
+      `Profile Kafka DLQ topic must differ from source topic: ${topic}`,
+    );
+  }
 
   const userCreatedUseCase =
     new UserCreatedHandler(
@@ -411,7 +291,6 @@ export async function startProfileEventsConsumer(
   const accountTypeChangedUseCase =
     new HandleAccountTypeChangedUseCase(
       prisma,
-
       options.failureInjector,
     );
 
@@ -424,153 +303,253 @@ export async function startProfileEventsConsumer(
         )
       : null;
 
-  await consumer.connect();
+  await producer.connect();
 
-  await consumer.subscribe({
-    topic,
+  try {
+    await consumer.connect();
 
-    fromBeginning:
-      options.fromBeginning ??
-      false,
-  });
+    await consumer.subscribe({
+      topic,
 
-  await consumer.run({
-    eachMessage:
-      async ({
-        message,
-      }) => {
-        if (!message.value) {
-          return;
-        }
+      fromBeginning:
+        options.fromBeginning ??
+        false,
+    });
 
-        const parsedEvent =
-          parseMessage(
-            message.value,
-          );
+    await consumer.run({
+      eachMessage:
+        async ({
+          topic:
+            messageTopic,
 
-        if (!parsedEvent) {
-          return;
-        }
+          partition,
 
-        /*
-         * ---------------------------------------------------------
-         * identity.user.created
-         * ---------------------------------------------------------
-         */
-        if (
-          parsedEvent.eventType ===
-          "identity.user.created"
-        ) {
-          await userCreatedUseCase.execute(
-            parsedEvent.event,
-          );
+          message,
+        }) => {
+          if (
+            !message.value
+          ) {
+            await publishDeadLetter(
+              producer,
+              dlqTopic,
+              {
+                reason:
+                  "MISSING_MESSAGE_VALUE",
 
-          console.log(
-            JSON.stringify({
-              message:
-                "Profile user-created event processed",
+                error:
+                  "Kafka message does not contain a value",
 
-              eventId:
-                parsedEvent.event
-                  .eventId,
+                topic:
+                  messageTopic,
 
-              userId:
-                parsedEvent.event
-                  .userId,
+                partition,
 
-              accountType:
-                parsedEvent.event
-                  .accountType,
-            }),
-          );
+                offset:
+                  message.offset,
 
-          return;
-        }
+                key:
+                  message.key
+                    ? message.key.toString(
+                        "utf8",
+                      )
+                    : null,
 
-        /*
-         * ---------------------------------------------------------
-         * identity.account.type.changed
-         * ---------------------------------------------------------
-         */
-        if (
-          parsedEvent.eventType ===
-          "identity.account.type.changed"
-        ) {
-          const result =
-            await accountTypeChangedUseCase.execute(
+                timestamp:
+                  message.timestamp ??
+                  null,
+
+                rawValue:
+                  null,
+              },
+            );
+
+            return;
+          }
+
+          const rawValue =
+            message.value.toString(
+              "utf8",
+            );
+
+          let parsedEvent;
+
+          try {
+            parsedEvent =
+              parseProfileEvent(
+                message.value,
+              );
+          } catch (
+            error
+          ) {
+            const reason =
+              error instanceof
+                ProfileEventParseError
+                ? error.reason
+                : "INVALID_EVENT";
+
+            const errorMessage =
+              error instanceof Error
+                ? error.message
+                : String(error);
+
+            await publishDeadLetter(
+              producer,
+              dlqTopic,
+              {
+                reason,
+
+                error:
+                  errorMessage,
+
+                topic:
+                  messageTopic,
+
+                partition,
+
+                offset:
+                  message.offset,
+
+                key:
+                  message.key
+                    ? message.key.toString(
+                        "utf8",
+                      )
+                    : null,
+
+                timestamp:
+                  message.timestamp ??
+                  null,
+
+                rawValue,
+              },
+            );
+
+            return;
+          }
+
+          if (
+            parsedEvent.eventType ===
+            "identity.user.created"
+          ) {
+            await userCreatedUseCase.execute(
               parsedEvent.event,
             );
 
-          let logMessage =
-            "Profile account-type-changed event processed";
+            console.log(
+              JSON.stringify({
+                message:
+                  "Profile user-created event processed",
 
-          if (
-            result.outcome ===
-            "APPLIED_WITH_GAP"
-          ) {
-            logMessage =
-              "Profile account-type-changed event processed with state gap";
+                eventId:
+                  parsedEvent.event
+                    .eventId,
+
+                userId:
+                  parsedEvent.event
+                    .userId,
+
+                accountType:
+                  parsedEvent.event
+                    .accountType,
+              }),
+            );
+
+            return;
           }
 
           if (
-            result.outcome ===
-            "IGNORED_STALE"
+            parsedEvent.eventType ===
+            "identity.account.type.changed"
           ) {
-            logMessage =
-              "Profile stale account-type-changed event ignored";
+            const result =
+              await accountTypeChangedUseCase.execute(
+                parsedEvent.event,
+              );
+
+            let logMessage =
+              "Profile account-type-changed event processed";
+
+            if (
+              result.outcome ===
+              "APPLIED_WITH_GAP"
+            ) {
+              logMessage =
+                "Profile account-type-changed event processed with state gap";
+            }
+
+            if (
+              result.outcome ===
+              "IGNORED_STALE"
+            ) {
+              logMessage =
+                "Profile stale account-type-changed event ignored";
+            }
+
+            console.log(
+              JSON.stringify({
+                message:
+                  logMessage,
+
+                eventId:
+                  parsedEvent.event
+                    .eventId,
+
+                userId:
+                  parsedEvent.event
+                    .payload
+                    .userId,
+
+                previousAccountType:
+                  parsedEvent.event
+                    .payload
+                    .previousAccountType,
+
+                newAccountType:
+                  parsedEvent.event
+                    .payload
+                    .newAccountType,
+
+                outcome:
+                  result.outcome,
+              }),
+            );
+
+            return;
           }
+        },
+    });
 
-          console.log(
-            JSON.stringify({
-              message:
-                logMessage,
+    if (
+      readyPromise
+    ) {
+      await readyPromise;
+    }
+  } catch (
+    error
+  ) {
+    await consumer
+      .disconnect()
+      .catch(
+        () => undefined,
+      );
 
-              eventId:
-                parsedEvent.event
-                  .eventId,
+    await producer
+      .disconnect()
+      .catch(
+        () => undefined,
+      );
 
-              userId:
-                parsedEvent.event
-                  .payload
-                  .userId,
-
-              previousAccountType:
-                parsedEvent.event
-                  .payload
-                  .previousAccountType,
-
-              newAccountType:
-                parsedEvent.event
-                  .payload
-                  .newAccountType,
-
-              outcome:
-                result.outcome,
-            }),
-          );
-
-          return;
-        }
-
-        const exhaustiveCheck:
-          never =
-          parsedEvent;
-
-        throw new Error(
-          `Unsupported parsed profile event: ${String(
-            exhaustiveCheck,
-          )}`,
-        );
-      },
-  });
-
-  if (readyPromise) {
-    await readyPromise;
+    throw error;
   }
 
   return {
-    async stop(): Promise<void> {
-      await consumer.disconnect();
+    async stop():
+      Promise<void> {
+      try {
+        await consumer.disconnect();
+      } finally {
+        await producer.disconnect();
+      }
     },
   };
 }

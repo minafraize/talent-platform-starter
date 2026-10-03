@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "worker:events": "tsx src/workers/events.ts",
+    "worker:dlq-replay": "tsx src/workers/dlq-replay.worker.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run --config vitest.config.mts",
     "test:watch": "vitest --config vitest.config.mts",

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   Kafka,
+  type Admin,
   type Producer,
 } from "kafkajs";
 
@@ -32,14 +33,10 @@ const brokers = (
   "localhost:9092"
 ).split(",");
 
-const topic =
-  process.env.KAFKA_PROFILE_TEST_TOPIC ??
-  "identity.events.test";
-
 const kafka =
   new Kafka({
     clientId:
-      `profile-redelivery-${randomUUID()}`,
+      `profile-redelivery-tests-${randomUUID()}`,
 
     brokers,
   });
@@ -91,9 +88,11 @@ async function waitFor(
   condition:
     () => Promise<boolean>,
 
-  timeoutMs = 30_000,
+  timeoutMs =
+    30_000,
 
-  intervalMs = 250,
+  intervalMs =
+    250,
 ): Promise<void> {
   const startedAt =
     Date.now();
@@ -109,7 +108,7 @@ async function waitFor(
       return;
     }
 
-    await new Promise(
+    await new Promise<void>(
       (resolve) => {
         setTimeout(
           resolve,
@@ -124,18 +123,67 @@ async function waitFor(
   );
 }
 
+async function createTopic(
+  admin:
+    Admin,
+
+  topic:
+    string,
+): Promise<void> {
+  await admin.createTopics({
+    waitForLeaders:
+      true,
+
+    topics: [
+      {
+        topic,
+
+        numPartitions:
+          1,
+
+        replicationFactor:
+          1,
+      },
+    ],
+  });
+}
+
+async function cleanupUserState(
+  userId:
+    string,
+
+  eventId:
+    string,
+): Promise<void> {
+  await prisma.account.deleteMany({
+    where: {
+      userId,
+    },
+  });
+
+  await prisma.processedEvent.deleteMany({
+    where: {
+      eventId,
+    },
+  });
+}
+
 describe(
   "Kafka redelivery after profile failure",
   () => {
     let producer:
       Producer;
 
-    let consumerRuntime:
-      | ProfileEventsConsumerRuntime
-      | undefined;
+    let admin:
+      Admin;
 
     beforeAll(
       async () => {
+        admin =
+          kafka.admin();
+
+        await admin.connect();
+
         producer =
           kafka.producer();
 
@@ -145,13 +193,9 @@ describe(
 
     afterAll(
       async () => {
-        if (
-          consumerRuntime
-        ) {
-          await consumerRuntime.stop();
-        }
-
         await producer.disconnect();
+
+        await admin.disconnect();
 
         await prisma.$disconnect();
       },
@@ -160,6 +204,9 @@ describe(
     it(
       "redelivers an event after the first processing attempt fails",
       async () => {
+        const topic =
+          `identity.events.redelivery.account-${randomUUID()}`;
+
         const eventId =
           randomUUID();
 
@@ -171,49 +218,44 @@ describe(
             "ACCOUNT_CREATION",
           );
 
-        const groupId =
-          `profile-redelivery-${randomUUID()}`;
+        let consumerRuntime:
+          | ProfileEventsConsumerRuntime
+          | undefined;
 
-        consumerRuntime =
-          await startProfileEventsConsumer(
-            prisma,
-            {
-              topic,
-
-              groupId,
-
-              fromBeginning:
-                false,
-
-              waitForReady:
-                true,
-
-              readyTimeoutMs:
-                10_000,
-
-              failureInjector,
-            },
+        try {
+          await createTopic(
+            admin,
+            topic,
           );
 
-        const event = {
-          eventId,
+          consumerRuntime =
+            await startProfileEventsConsumer(
+              prisma,
+              {
+                topic,
 
-          eventType:
-            "identity.user.created" as const,
+                groupId:
+                  `profile-redelivery-account-${randomUUID()}`,
 
-          version:
-            1,
+                fromBeginning:
+                  true,
 
-          producer:
-            "identity-service",
+                waitForReady:
+                  true,
 
-          occurredAt:
-            new Date().toISOString(),
+                readyTimeoutMs:
+                  10_000,
 
-          aggregateId:
-            userId,
+                failureInjector,
+              },
+            );
 
-          payload: {
+          const event = {
+            eventId,
+
+            eventType:
+              "identity.user.created" as const,
+
             version:
               1,
 
@@ -223,138 +265,144 @@ describe(
             occurredAt:
               new Date().toISOString(),
 
-            userId,
-
-            accountType:
-              "TALENT" as const,
-
-            email:
-              `${userId}@redelivery.test`,
-          },
-        };
-
-        await producer.send({
-          topic,
-
-          messages: [
-            {
-              key:
-                userId,
-
-              value:
-                JSON.stringify(
-                  event,
-                ),
-            },
-          ],
-        });
-
-        /**
-         * Wait until the message has actually
-         * been processed successfully after
-         * the first failed attempt.
-         */
-        await waitFor(
-          async () => {
-            const account =
-              await prisma.account.findUnique({
-                where: {
-                  userId,
-                },
-              });
-
-            return (
-              account !==
-              null
-            );
-          },
-        );
-
-        /**
-         * First attempt failed.
-         * Second attempt succeeded.
-         */
-        expect(
-          failureInjector.accountCreationAttempts,
-        ).toBeGreaterThanOrEqual(
-          2,
-        );
-
-        const account =
-          await prisma.account.findUnique({
-            where: {
+            aggregateId:
               userId,
-            },
 
-            include: {
-              profile:
-                true,
+            payload: {
+              userId,
 
-              talentProfile:
-                true,
+              email:
+                `${userId}@redelivery.test`,
+
+              accountType:
+                "TALENT" as const,
             },
+          };
+
+          await producer.send({
+            topic,
+
+            messages: [
+              {
+                partition:
+                  0,
+
+                key:
+                  userId,
+
+                value:
+                  JSON.stringify(
+                    event,
+                  ),
+              },
+            ],
           });
 
-        expect(
-          account,
-        ).not.toBeNull();
+          await waitFor(
+            async () => {
+              const account =
+                await prisma.account.findUnique({
+                  where: {
+                    userId,
+                  },
+                });
 
-        expect(
-          account?.type,
-        ).toBe("TALENT");
-
-        expect(
-          account?.profile,
-        ).not.toBeNull();
-
-        expect(
-          account?.talentProfile,
-        ).not.toBeNull();
-
-        const processedEvent =
-          await prisma.processedEvent.findUnique(
-            {
-              where: {
-                eventId,
-              },
+              return (
+                account !==
+                null
+              );
             },
           );
 
-        expect(
-          processedEvent,
-        ).not.toBeNull();
+          expect(
+            failureInjector.accountCreationAttempts,
+          ).toBeGreaterThanOrEqual(
+            2,
+          );
 
-        /**
-         * There must only be one business
-         * Account after the redelivery.
-         */
-        const accounts =
-          await prisma.account.count({
-            where: {
-              userId,
-            },
-          });
+          const account =
+            await prisma.account.findUnique({
+              where: {
+                userId,
+              },
 
-        expect(
-          accounts,
-        ).toBe(1);
+              include: {
+                profile:
+                  true,
 
-        await prisma.account.delete({
-          where: {
+                talentProfile:
+                  true,
+
+                professionalProfile:
+                  true,
+              },
+            });
+
+          expect(
+            account,
+          ).not.toBeNull();
+
+          expect(
+            account?.type,
+          ).toBe(
+            "TALENT",
+          );
+
+          expect(
+            account?.profile,
+          ).not.toBeNull();
+
+          expect(
+            account?.talentProfile,
+          ).not.toBeNull();
+
+          expect(
+            account?.professionalProfile,
+          ).toBeNull();
+
+          const processedEvent =
+            await prisma.processedEvent.findUnique({
+              where: {
+                eventId,
+              },
+            });
+
+          expect(
+            processedEvent,
+          ).not.toBeNull();
+
+          const accountCount =
+            await prisma.account.count({
+              where: {
+                userId,
+              },
+            });
+
+          expect(
+            accountCount,
+          ).toBe(1);
+        } finally {
+          if (
+            consumerRuntime
+          ) {
+            await consumerRuntime
+              .stop()
+              .catch(
+                () => undefined,
+              );
+          }
+
+          await cleanupUserState(
             userId,
-          },
-        });
-
-        await prisma.processedEvent.delete({
-          where: {
             eventId,
-          },
-        });
+          );
 
-        await consumerRuntime.stop();
-
-        consumerRuntime =
-          undefined;
+          await admin.deleteTopics({
+            topics: [
+              topic,
+            ],
+          });
+        }
       },
       40_000,
     );
@@ -362,6 +410,9 @@ describe(
     it(
       "redelivers an account type change after the projection transaction fails",
       async () => {
+        const topic =
+          `identity.events.redelivery.account-type-${randomUUID()}`;
+
         const eventId =
           randomUUID();
 
@@ -373,243 +424,242 @@ describe(
             "ACCOUNT_TYPE_CHANGE",
           );
 
-        const groupId =
-          `profile-account-type-redelivery-${randomUUID()}`;
+        let consumerRuntime:
+          | ProfileEventsConsumerRuntime
+          | undefined;
 
-        consumerRuntime =
-          await startProfileEventsConsumer(
-            prisma,
-            {
-              topic,
+        try {
+          await createTopic(
+            admin,
+            topic,
+          );
 
-              groupId,
+          await prisma.account.create({
+            data: {
+              userId,
 
-              fromBeginning:
-                false,
+              type:
+                "USER",
 
-              waitForReady:
-                true,
+              status:
+                "ACTIVE",
 
-              readyTimeoutMs:
-                10_000,
+              profile: {
+                create: {},
+              },
+            },
+          });
 
-              failureInjector,
+          consumerRuntime =
+            await startProfileEventsConsumer(
+              prisma,
+              {
+                topic,
+
+                groupId:
+                  `profile-redelivery-account-type-${randomUUID()}`,
+
+                fromBeginning:
+                  true,
+
+                waitForReady:
+                  true,
+
+                readyTimeoutMs:
+                  10_000,
+
+                failureInjector,
+              },
+            );
+
+          const event = {
+            eventId,
+
+            eventType:
+              "identity.account.type.changed" as const,
+
+            version:
+              1,
+
+            producer:
+              "identity-service",
+
+            occurredAt:
+              new Date().toISOString(),
+
+            aggregateId:
+              userId,
+
+            payload: {
+              userId,
+
+              previousAccountType:
+                "USER" as const,
+
+              newAccountType:
+                "TALENT" as const,
+            },
+          };
+
+          await producer.send({
+            topic,
+
+            messages: [
+              {
+                partition:
+                  0,
+
+                key:
+                  userId,
+
+                value:
+                  JSON.stringify(
+                    event,
+                  ),
+              },
+            ],
+          });
+
+          await waitFor(
+            async () => {
+              const account =
+                await prisma.account.findUnique({
+                  where: {
+                    userId,
+                  },
+
+                  include: {
+                    talentProfile:
+                      true,
+
+                    professionalProfile:
+                      true,
+                  },
+                });
+
+              return (
+                account?.type ===
+                  "TALENT" &&
+                account.talentProfile !==
+                  null
+              );
             },
           );
 
-        await prisma.account.create({
-          data: {
-            userId,
+          expect(
+            failureInjector.accountTypeChangeAttempts,
+          ).toBeGreaterThanOrEqual(
+            2,
+          );
 
-            type:
-              "USER",
-
-            status:
-              "ACTIVE",
-
-            profile: {
-              create: {},
-            },
-          },
-        });
-
-        const event = {
-          eventId,
-
-          eventType:
-            "identity.account.type.changed" as const,
-
-          version:
-            1,
-
-          producer:
-            "identity-service",
-
-          occurredAt:
-            new Date().toISOString(),
-
-          aggregateId:
-            userId,
-
-          payload: {
-            userId,
-
-            previousAccountType:
-              "USER" as const,
-
-            newAccountType:
-              "TALENT" as const,
-          },
-        };
-
-        await producer.send({
-          topic,
-
-          messages: [
-            {
-              key:
+          const account =
+            await prisma.account.findUnique({
+              where: {
                 userId,
+              },
 
-              value:
-                JSON.stringify(
-                  event,
-                ),
-            },
-          ],
-        });
+              include: {
+                profile:
+                  true,
 
-        /*
-         * Wait until the event has eventually
-         * succeeded after the first failure.
-         */
-        await waitFor(
-          async () => {
-            const account =
-              await prisma.account.findUnique({
-                where: {
-                  userId,
-                },
+                talentProfile:
+                  true,
 
-                include: {
-                  talentProfile:
-                    true,
+                professionalProfile:
+                  true,
+              },
+            });
 
-                  professionalProfile:
-                    true,
-                },
-              });
+          expect(
+            account,
+          ).not.toBeNull();
 
-            return (
-              account?.type ===
-                "TALENT" &&
-              account.talentProfile !==
-                null
-            );
-          },
-        );
+          expect(
+            account?.type,
+          ).toBe(
+            "TALENT",
+          );
 
-        /*
-         * First processing attempt failed.
-         * A later Kafka delivery succeeded.
-         */
-        expect(
-          failureInjector.accountTypeChangeAttempts,
-        ).toBeGreaterThanOrEqual(
-          2,
-        );
+          expect(
+            account?.profile,
+          ).not.toBeNull();
 
-        const account =
-          await prisma.account.findUnique({
-            where: {
-              userId,
-            },
+          expect(
+            account?.talentProfile,
+          ).not.toBeNull();
 
-            include: {
-              profile:
-                true,
+          expect(
+            account?.professionalProfile,
+          ).toBeNull();
 
-              talentProfile:
-                true,
+          const accountCount =
+            await prisma.account.count({
+              where: {
+                userId,
+              },
+            });
 
-              professionalProfile:
-                true,
-            },
-          });
+          expect(
+            accountCount,
+          ).toBe(1);
 
-        expect(
-          account,
-        ).not.toBeNull();
+          const talentProfileCount =
+            await prisma.talentProfile.count({
+              where: {
+                accountId:
+                  account!.id,
+              },
+            });
 
-        expect(
-          account?.type,
-        ).toBe("TALENT");
+          expect(
+            talentProfileCount,
+          ).toBe(1);
 
-        expect(
-          account?.profile,
-        ).not.toBeNull();
+          const processedEvents =
+            await prisma.processedEvent.count({
+              where: {
+                eventId,
+              },
+            });
 
-        expect(
-          account?.talentProfile,
-        ).not.toBeNull();
+          expect(
+            processedEvents,
+          ).toBe(1);
 
-        expect(
-          account?.professionalProfile,
-        ).toBeNull();
+          const processedEvent =
+            await prisma.processedEvent.findUnique({
+              where: {
+                eventId,
+              },
+            });
 
-        /*
-         * The failed transaction must not leave
-         * duplicate or partial projection state.
-         */
-        const accountCount =
-          await prisma.account.count({
-            where: {
-              userId,
-            },
-          });
+          expect(
+            processedEvent?.eventType,
+          ).toBe(
+            "identity.account.type.changed",
+          );
+        } finally {
+          if (
+            consumerRuntime
+          ) {
+            await consumerRuntime
+              .stop()
+              .catch(
+                () => undefined,
+              );
+          }
 
-        expect(
-          accountCount,
-        ).toBe(1);
-
-        const talentProfileCount =
-          await prisma.talentProfile.count({
-            where: {
-              accountId:
-                account!.id,
-            },
-          });
-
-        expect(
-          talentProfileCount,
-        ).toBe(1);
-
-        /*
-         * processedEvent is written in the same
-         * transaction as the projection.
-         *
-         * Therefore it should only exist after
-         * the successful retry.
-         */
-        const processedEvents =
-          await prisma.processedEvent.count({
-            where: {
-              eventId,
-            },
-          });
-
-        expect(
-          processedEvents,
-        ).toBe(1);
-
-        const processedEvent =
-          await prisma.processedEvent.findUnique({
-            where: {
-              eventId,
-            },
-          });
-
-        expect(
-          processedEvent?.eventType,
-        ).toBe(
-          "identity.account.type.changed",
-        );
-
-        await prisma.account.delete({
-          where: {
+          await cleanupUserState(
             userId,
-          },
-        });
-
-        await prisma.processedEvent.delete({
-          where: {
             eventId,
-          },
-        });
+          );
 
-        await consumerRuntime.stop();
-
-        consumerRuntime =
-          undefined;
+          await admin.deleteTopics({
+            topics: [
+              topic,
+            ],
+          });
+        }
       },
       40_000,
     );
